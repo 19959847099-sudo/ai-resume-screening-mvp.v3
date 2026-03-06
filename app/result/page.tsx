@@ -88,10 +88,18 @@ export default function ResultPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-gray-900">分析结果</h1>
+      <h1 className="text-3xl font-bold text-gray-900">匹配度：{displayResult?.score} / 100</h1>
+      <p className="text-sm text-gray-500">低于 60 分的简历，大概率会被 HR 刷掉。</p>
+      
       <ResultCard result={displayResult} paidLocked={!fullResult} onUnlock={goToPay} />
+      
       {loadingFull && <p className="text-sm text-gray-500">正在检查会员状态...</p>}
+      
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <p className="text-sm text-gray-500">
+        本分析由 AI 模拟 HR 初筛逻辑生成，仅供投递前参考，不代表真实招聘结果。
+      </p>
     </div>
   );
 }

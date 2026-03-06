@@ -4,7 +4,9 @@ import { createOrder } from "@/lib/orders";
 export const runtime = "nodejs";
 initDb();
 
-const PLAN_AMOUNT_MAP: Record<"7d" | "30d", number> = {
+type Plan = "7d" | "30d";
+
+const PLAN_AMOUNT_MAP: Record<Plan, number> = {
   "7d": 900,
   "30d": 1900
 };
@@ -12,12 +14,13 @@ const PLAN_AMOUNT_MAP: Record<"7d" | "30d", number> = {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const plan = body?.plan;
+    const rawPlan = body?.plan;
 
-    if (plan !== "7d" && plan !== "30d") {
+    if (rawPlan !== "7d" && rawPlan !== "30d") {
       return Response.json({ success: false, message: "套餐参数无效", data: null }, { status: 400 });
     }
 
+    const plan: Plan = rawPlan;
     const amount = PLAN_AMOUNT_MAP[plan];
     const order = createOrder(plan, amount);
 
