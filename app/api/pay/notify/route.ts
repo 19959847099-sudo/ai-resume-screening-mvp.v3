@@ -8,6 +8,7 @@ import {
   type WechatPayNotifyPayload,
   type WechatPayTransaction
 } from "@/lib/wechatpay";
+import { logError, logInfo, logWarn } from "@/lib/logger";
 
 export const runtime = "nodejs";
 initDb();
@@ -39,7 +40,10 @@ async function handleMockNotify(request: Request) {
   const orderId = body?.order_id;
   const wxTransactionId = body?.wx_transaction_id;
 
+  logInfo("pay/notify", "收到 mock 支付回调", { orderId, wxTransactionId });
+
   if (!orderId || typeof orderId !== "string") {
+    logWarn("pay/notify", "mock 回调订单号为空或非法", { orderId });
     return Response.json(
       { success: false, message: "订单号不能为空", data: null },
       { status: 400 }
@@ -47,6 +51,7 @@ async function handleMockNotify(request: Request) {
   }
 
   if (!wxTransactionId || typeof wxTransactionId !== "string") {
+    logWarn("pay/notify", "mock 回调微信交易号为空或非法", { orderId, wxTransactionId });
     return Response.json(
       { success: false, message: "微信交易号不能为空", data: null },
       { status: 400 }
@@ -55,6 +60,7 @@ async function handleMockNotify(request: Request) {
 
   const order = getOrderById(orderId);
   if (!order) {
+    logWarn("pay/notify", "mock 回调订单不存在", { orderId });
     return Response.json(
       { success: false, message: "订单不存在", data: null },
       { status: 404 }
@@ -62,6 +68,7 @@ async function handleMockNotify(request: Request) {
   }
 
   if (order.status === "PAID") {
+    logInfo("pay/notify", "mock 回调命中已支付订单，直接返回", { orderId });
     return Response.json({
       success: true,
       message: "",
@@ -72,6 +79,13 @@ async function handleMockNotify(request: Request) {
   const expiresAt = calculateExpiryByPlan(order.plan);
   setOrderPaid(orderId, wxTransactionId, expiresAt);
   const membership = createMembership(orderId, expiresAt);
+
+  logInfo("pay/notify", "mock 支付处理成功", {
+    orderId,
+    wxTransactionId,
+    expiresAt,
+    shortCode: membership.short_code
+  });
 
   return Response.json({
     success: true,
@@ -87,20 +101,34 @@ async function handleMockNotify(request: Request) {
 
 async function handleRealNotify(request: Request) {
   const rawBody = await request.text();
+  logInfo("pay/notify", "收到 real 支付回调");
 
   const signatureOk = verifyNotifySignature(rawBody, request.headers);
   if (!signatureOk) {
+    logWarn("pay/notify", "微信回调验签失败");
     return Response.json(
       { code: "FAIL", message: "签名验证失败" },
       { status: 401 }
     );
   }
 
+  logInfo("pay/notify", "微信回调验签通过");
+
   const payload = JSON.parse(rawBody) as WechatPayNotifyPayload;
   const resourceText = decryptNotifyResource(payload.resource);
   const transaction = JSON.parse(resourceText) as WechatPayTransaction;
 
+  logInfo("pay/notify", "微信回调解密成功", {
+    out_trade_no: transaction.out_trade_no,
+    transaction_id: transaction.transaction_id,
+    trade_state: transaction.trade_state
+  });
+
   if (transaction.trade_state !== "SUCCESS") {
+    logInfo("pay/notify", "交易状态非 SUCCESS，忽略", {
+      out_trade_no: transaction.out_trade_no,
+      trade_state: transaction.trade_state
+    });
     return new Response(null, { status: 204 });
   }
 
@@ -108,6 +136,7 @@ async function handleRealNotify(request: Request) {
   const wxTransactionId = transaction.transaction_id;
 
   if (!orderId || !wxTransactionId) {
+    logWarn("pay/notify", "回调关键字段缺失", { orderId, wxTransactionId });
     return Response.json(
       { code: "FAIL", message: "回调数据缺失" },
       { status: 400 }
@@ -116,6 +145,7 @@ async function handleRealNotify(request: Request) {
 
   const order = getOrderById(orderId);
   if (!order) {
+    logWarn("pay/notify", "回调订单不存在", { orderId });
     return Response.json(
       { code: "FAIL", message: "订单不存在" },
       { status: 404 }
@@ -123,6 +153,11 @@ async function handleRealNotify(request: Request) {
   }
 
   if (transaction.amount?.total !== order.amount) {
+    logWarn("pay/notify", "订单金额不匹配", {
+      orderId,
+      orderAmount: order.amount,
+      callbackAmount: transaction.amount?.total
+    });
     return Response.json(
       { code: "FAIL", message: "订单金额不匹配" },
       { status: 400 }
@@ -130,6 +165,7 @@ async function handleRealNotify(request: Request) {
   }
 
   if (order.status === "PAID") {
+    logInfo("pay/notify", "订单已支付，幂等返回", { orderId });
     return new Response(null, { status: 204 });
   }
 
@@ -139,7 +175,16 @@ async function handleRealNotify(request: Request) {
   const existing = findMembershipByOrder(orderId);
   if (!existing) {
     createMembership(orderId, expiresAt);
+    logInfo("pay/notify", "会员创建成功", { orderId, expiresAt });
+  } else {
+    logInfo("pay/notify", "会员已存在，跳过创建", { orderId });
   }
+
+  logInfo("pay/notify", "real 支付处理成功", {
+    orderId,
+    wxTransactionId,
+    expiresAt
+  });
 
   return new Response(null, { status: 204 });
 }
@@ -152,6 +197,10 @@ export async function POST(request: Request) {
 
     return handleRealNotify(request);
   } catch (error) {
+    logError("pay/notify", "支付回调处理失败", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+
     const message =
       error instanceof Error ? error.message : "支付回调处理失败";
 
